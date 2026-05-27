@@ -1,0 +1,12 @@
+# User-specific
+zen-key.txt
+zen-proxy.log
+.restart
+settings.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Node
+node_modules/

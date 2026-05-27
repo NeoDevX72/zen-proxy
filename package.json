@@ -1,0 +1,16 @@
+{
+  "name": "zen-proxy",
+  "version": "1.0.0",
+  "description": "Translate Anthropic Messages API to OpenAI-compatible API for DeepSeek V4 Flash Free via OpenCode Zen",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js",
+    "build": "pkg proxy.js --targets node18-win-x64 --output ZenProxy.exe"
+  },
+  "pkg": {
+    "scripts": ["proxy.js"],
+    "assets": []
+  },
+  "keywords": ["claude", "deepseek", "proxy", "anthropic", "opencode"],
+  "license": "MIT"
+}
