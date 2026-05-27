@@ -481,10 +481,10 @@ function serveDashboard(req, res) {
 <title>ZenProxy Dashboard</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-         background: #0f0f1a; color: #e2e8f0; min-height: 100vh; display: flex; }
-  .sidebar { width: 240px; background: #1a1a2e; padding: 24px 16px; display: flex;
-             flex-direction: column; border-right: 1px solid #2d2d44; flex-shrink: 0; }
+   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+         background: #0f0f1a; color: #e2e8f0; height: 100vh; overflow: hidden; display: flex; }
+   .sidebar { width: 240px; background: #1a1a2e; padding: 24px 16px; display: flex;
+             flex-direction: column; border-right: 1px solid #2d2d44; flex-shrink: 0; height: 100vh; overflow-y: auto; }
   .logo { font-size: 20px; font-weight: 700; margin-bottom: 4px; color: #e2e8f0; }
   .tagline { font-size: 12px; color: #94a3b8; margin-bottom: 24px; }
   .status-badge { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
@@ -500,7 +500,7 @@ function serveDashboard(req, res) {
   .nav-btn:hover { background: #3b3b5c; }
   .nav-btn.danger { color: #ef4444; }
   .nav-btn.danger:hover { background: #3b1a1a; }
-  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100vh; }
   .toolbar { padding: 12px 20px; background: #1a1a2e; border-bottom: 1px solid #2d2d44;
              display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
   .toolbar-title { font-size: 13px; font-weight: 600; color: #94a3b8; }
