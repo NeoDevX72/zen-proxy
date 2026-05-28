@@ -5,9 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const os = require('os');
-const { exec, spawn } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
 
-const PORT = 8080;
 const ZEN_HOST = 'opencode.ai';
 const ZEN_PATH = '/zen/v1/chat/completions';
 const ZEN_MODELS = '/zen/v1/models';
@@ -23,6 +22,30 @@ const APP_DIR = path.dirname(process.pkg ? process.execPath : __dirname);
 const KEY_FILE = path.join(APP_DIR, 'zen-key.txt');
 const LOG_FILE = path.join(APP_DIR, 'zen-proxy.log');
 const SETTINGS_FILE = path.join(os.homedir(), '.claude', 'settings.json');
+const CONFIG_FILE = path.join(APP_DIR, 'zen-config.json');
+
+function loadConfig() {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch {}
+  return {};
+}
+
+function saveConfig(config) {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+    return true;
+  } catch { return false; }
+}
+
+const userConfig = loadConfig();
+let PORT = (() => {
+  const idx = process.argv.indexOf('--port');
+  if (idx !== -1 && process.argv[idx + 1]) return parseInt(process.argv[idx + 1], 10);
+  if (process.env.PORT) return parseInt(process.env.PORT, 10);
+  if (userConfig.port) return parseInt(userConfig.port, 10);
+  return 8080;
+})();
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
@@ -60,7 +83,7 @@ function autoSetupSettings(apiKey) {
     }
     const settings = {
       env: {
-        ANTHROPIC_BASE_URL: 'http://127.0.0.1:8080',
+        ANTHROPIC_BASE_URL: `http://127.0.0.1:${PORT}`,
         ANTHROPIC_MODEL: 'deepseek-v4-flash-free',
         ANTHROPIC_API_KEY: apiKey || '',
         ENABLE_TOOL_SEARCH: 'true',
@@ -448,6 +471,11 @@ function broadcastLog(line) {
   });
 }
 
+function closeAllSSE() {
+  logClients.forEach(c => { try { c.destroy(); } catch {} });
+  logClients = [];
+}
+
 function handleLogSSE(req, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -521,6 +549,14 @@ function serveDashboard(req, res) {
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #2d2d44; border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: #3b3b5c; }
+  .port-input { display: flex; gap: 4px; align-items: center; }
+  .port-input input { flex: 1; background: #1a1a2e; border: 1px solid #3b3b5c; color: #e2e8f0;
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: 'Consolas', monospace; outline: none; }
+  .port-input input:focus { border-color: #7c3aed; }
+  .port-input button { background: #7c3aed; border: none; color: #fff; padding: 4px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 11px; white-space: nowrap; }
+  .port-input button:hover { background: #6d28d9; }
+  .port-input .saved { color: #22c55e; font-size: 11px; }
   @media (max-width: 700px) { .sidebar { width: 200px; } }
 </style>
 </head>
@@ -533,8 +569,12 @@ function serveDashboard(req, res) {
     <span id="statusText">Running</span>
   </div>
   <div class="stat">
-    <div class="stat-label">Proxy URL</div>
-    <div class="stat-value">http://127.0.0.1:8080</div>
+    <div class="stat-label">Port</div>
+    <div class="port-input">
+      <input type="number" id="portInput" value="${PORT}" min="1" max="65535">
+      <button onclick="savePort()">Apply</button>
+      <span id="portStatus" style="display:none;color:#22c55e;font-size:11px">Saved</span>
+    </div>
   </div>
   <div class="stat">
     <div class="stat-label">Model</div>
@@ -600,6 +640,7 @@ function serveDashboard(req, res) {
       document.getElementById('statusDot').className = 'dot stopped';
       document.getElementById('statusText').textContent = 'Stopped';
       container.appendChild(d);
+      setTimeout(() => { try { window.close(); } catch {} }, 2000);
     }
   };
   setInterval(async () => {
@@ -612,6 +653,45 @@ function serveDashboard(req, res) {
       }
     } catch {}
   }, 2000);
+
+  async function savePort() {
+    const input = document.getElementById('portInput');
+    const status = document.getElementById('portStatus');
+    const btn = input.nextElementSibling;
+    btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+      const r = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: parseInt(input.value) })
+      });
+      const d = await r.json();
+      if (d.saved) {
+        status.style.display = 'inline'; status.textContent = 'Restarting...';
+        btn.textContent = 'Applied';
+        setTimeout(() => {
+          const newUrl = 'http://127.0.0.1:' + d.port + '/';
+          let tries = 0;
+          function tryConnect() {
+            fetch(newUrl).then(r => { if (r.ok) { window.location.href = newUrl; setTimeout(() => { try { window.close(); } catch {} }, 500); } else retry(); }).catch(retry);
+          }
+          function retry() {
+            tries++;
+            if (tries < 20) setTimeout(tryConnect, 2000);
+            else { status.textContent = 'Timeout - restart manually'; status.style.color = '#ef4444'; btn.disabled = false; btn.textContent = 'Apply'; }
+          }
+          tryConnect();
+        }, 3000);
+      } else {
+        btn.textContent = 'Apply';
+        btn.disabled = false;
+        status.style.display = 'inline'; status.textContent = d.error || 'Error'; status.style.color = '#ef4444';
+      }
+    } catch(e) {
+      btn.textContent = 'Apply'; btn.disabled = false;
+      status.style.display = 'inline'; status.textContent = 'Failed'; status.style.color = '#ef4444';
+    }
+  }
 </script>
 </body>
 </html>`;
@@ -622,23 +702,74 @@ function serveDashboard(req, res) {
 // ========== API ENDPOINTS ==========
 let shuttingDown = false;
 
-function handleRestart(req, res) {
-  shuttingDown = true;
-  log('Restart requested via dashboard');
-  serveStopPage(res, 'restart');
-  broadcastLog('--- RESTARTING ---');
-  // Spawn a new instance before this one exits
-  const exePath = process.execPath;
-  spawn('cmd.exe', ['/c', 'ping 127.0.0.1 -n 2 > nul & start "" "' + exePath + '"'], {
-    detached: true, stdio: 'ignore', windowsHide: true
-  }).unref();
-  setTimeout(() => { server.close(() => process.exit(0)); }, 500);
+function restartProcess(targetPort) {
+  closeAllSSE();
+  const config = loadConfig();
+  const newPort = targetPort || config.port || PORT;
+  // Stop accepting new connections, then force-close remaining after response is sent
+  try { server.close(); } catch {}
+  try { server.closeIdleConnections(); } catch {}
+  setImmediate(() => {
+    try { server.closeAllConnections(); } catch {}
+    PORT = newPort;
+    const newServer = http.createServer(handleRequest);
+    newServer.on('error', (e) => {
+      if (e.code === 'EADDRINUSE') {
+        log(`Port ${PORT} in use, trying ${PORT + 1}`);
+        PORT++;
+        newServer.listen(PORT, '127.0.0.1');
+        return;
+      }
+    });
+    newServer.listen(PORT, '127.0.0.1', () => {
+      log(`Server restarted on http://127.0.0.1:${PORT}`);
+      broadcastLog(`Server restarted on port ${PORT}`);
+    });
+    server = newServer;
+  });
+  return newPort;
 }
 
-function serveStopPage(res, type) {
+function handleRestart(req, res) {
+  log('Restart requested via dashboard');
+  const port = restartProcess(PORT);
+  serveStopPage(res, 'restart', port);
+  broadcastLog('--- RESTARTING ---');
+}
+
+function handleConfig(req, res) {
+  if (req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ port: PORT }));
+  }
+  parseBody(req).then(data => {
+    if (!data.port) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'No port provided' }));
+    }
+    const newPort = parseInt(data.port, 10);
+    if (isNaN(newPort) || newPort < 1 || newPort > 65535) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Invalid port (1-65535)' }));
+    }
+    const config = loadConfig();
+    config.port = newPort;
+    saveConfig(config);
+    log(`Port changed to ${newPort} via dashboard`);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ saved: true, port: newPort }));
+    restartProcess(newPort);
+  }).catch(() => {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+  });
+}
+
+function serveStopPage(res, type, port) {
   const isRestart = type === 'restart';
+  const redirectPort = port || PORT;
   res.writeHead(200, { 'Content-Type': 'text/html' });
-  const refreshMeta = isRestart ? '<meta http-equiv="refresh" content="2;url=/">' : '';
+  const refreshMeta = isRestart ? '<meta http-equiv="refresh" content="2;url=http://127.0.0.1:' + redirectPort + '/">' : '';
   res.end(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">${refreshMeta}<title>ZenProxy</title><style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0f0f1a;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
@@ -651,11 +782,29 @@ p{color:#94a3b8;font-size:14px}
 }
 
 function handleShutdown(req, res) {
-  shuttingDown = true;
   log('Shutdown requested via dashboard');
-  serveStopPage(res, 'shutdown');
   broadcastLog('--- SHUTDOWN ---');
-  setTimeout(() => { server.close(() => process.exit(0)); }, 200);
+  closeAllSSE();
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>ZenProxy</title><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0f0f1a;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#1a1a2e;padding:40px 48px;border-radius:12px;text-align:center;border:1px solid #2d2d44}
+.dot{width:12px;height:12px;border-radius:50%;margin:0 auto 16px;background:#ef4444}
+h2{color:#e2e8f0;margin:0 0 8px;font-size:20px}
+p{color:#94a3b8;font-size:14px;margin:0 0 8px}
+small{color:#64748b;font-size:11px;display:block;margin-top:12px}</style></head><body><div class="card"><div class="dot"></div><h2>Shut Down</h2><p>ZenProxy has stopped. Close this tab.</p><small>You may close the console window manually.</small></div></body></html>`);
+  res.once('finish', () => {
+    const cp = require('child_process');
+    // Spawn detached taskkill to kill this process from outside
+    cp.spawn('taskkill', ['/f', '/pid', String(process.pid)], {
+      detached: true, windowsHide: true, stdio: 'ignore'
+    }).unref();
+    // Fallback: try process.exit after a delay
+    setTimeout(() => {
+      try { process.exit(0); } catch {}
+    }, 2000);
+  });
 }
 
 function handleStatus(req, res) {
@@ -674,7 +823,7 @@ function handleLogFile(req, res) {
   }
 }
 
-const server = http.createServer((req, res) => {
+function handleRequest(req, res) {
   const parsed = new URL(req.url, `http://${req.headers.host}`);
   const path = parsed.pathname;
 
@@ -688,6 +837,7 @@ const server = http.createServer((req, res) => {
   if (path === '/logs' && req.method === 'GET') return handleLogSSE(req, res);
   if (path === '/log-file' && req.method === 'GET') return handleLogFile(req, res);
   if (path === '/api/status' && req.method === 'GET') return handleStatus(req, res);
+  if (path === '/api/config' && (req.method === 'GET' || req.method === 'POST')) return handleConfig(req, res);
   if (path === '/api/restart' && (req.method === 'GET' || req.method === 'POST')) return handleRestart(req, res);
   if (path === '/api/shutdown' && (req.method === 'GET' || req.method === 'POST')) return handleShutdown(req, res);
   if (path === '/v1/messages' && req.method === 'POST') return handleMessages(req, res);
@@ -695,7 +845,9 @@ const server = http.createServer((req, res) => {
 
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
-});
+}
+
+let server = http.createServer(handleRequest);
 
 process.on('SIGINT', () => {
   log('Shutting down...');

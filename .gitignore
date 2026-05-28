@@ -1,6 +1,7 @@
 # User-specific
 zen-key.txt
 zen-proxy.log
+zen-config.json
 .restart
 settings.json
 
